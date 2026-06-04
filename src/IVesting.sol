@@ -9,10 +9,14 @@ struct VestingTable {
     address to;
     // 归属的数量。
     uint256 amountTotal;
+    // 已经归属的数量。
+    uint256 amountVested;
     // 已经发放的数量。
     uint256 amountGiven;
     // 规则。
     VestingRule[] rules;
+    // 遍历rule的下标。
+    uint256 ruleScanIndex;
 }
 // 归属的规则。
 struct VestingRule {
@@ -22,10 +26,10 @@ struct VestingRule {
     uint256 amount;
     // 指定的归属时间。
     uint256 atTime;
+    // 是否已经归属。
+    bool vested;
 }
 // 归属接口。
 interface IVesting {
-    // 百分比系数。
-    uint256 constant PERCENT_LIMIT = 10000;
     event OK();
 }
