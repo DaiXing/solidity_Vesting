@@ -7,12 +7,12 @@ struct VestingTable {
     address tokenAddr;
     // 给某人。
     address to;
-    // 归属的数量。
+    // 应该归属的数量。
     uint256 amountTotal;
     // 已经归属的数量。
     uint256 amountVested;
     // 已经发放的数量。
-    uint256 amountGiven;
+    uint256 amountClaimed;
     // 规则。
     VestingRule[] rules;
     // 遍历rule的下标。

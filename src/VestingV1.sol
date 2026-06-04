@@ -2,23 +2,45 @@
 pragma solidity ^0.8.13;
 
 import {VestingTable, VestingRule, IVesting} from "./IVesting.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {
+    UUPSUpgradeable
+} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 // 百分比系数。
 uint256 constant PERCENT_LIMIT = 10000;
+bytes32 constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 // 归属。
-contract VestingV1 is IVesting {
+contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     uint256 vestingIdSeq = 0; // 序号。
     mapping(uint256 => VestingTable) vestingMap; // 全部的归属表。
+
+    // 初始化。
+    function init() public {
+        vestingIdSeq = 0;
+
+        // 权限。
+        grantRole(ADMIN_ROLE, msg.sender);
+    }
+
+    // 升级。
+    function _authorizeUpgrade(
+        address impl
+    ) internal override onlyRole(ADMIN_ROLE) {}
 
     modifier needOwner(uint256 vestingId) {
         needOwner_(vestingId);
         _;
     }
     function needOwner_(uint256 vestingId) private view {
+        // 管理员。权限大。
+        if (hasRole(ADMIN_ROLE, msg.sender)) {
+            return;
+        }
         VestingTable storage table = vestingMap[vestingId];
+        // 归属给谁。
         require(table.to == msg.sender, "not vesting owner");
     }
 
@@ -48,6 +70,7 @@ contract VestingV1 is IVesting {
         vestingIdSeq++;
         // 填充归属表。
         VestingTable storage table = vestingMap[vestingIdSeq];
+        table.amountTotal = amountTotal;
 
         // 需要归属表的数量
         uint256 amountForVestingTable = 0;
@@ -76,7 +99,8 @@ contract VestingV1 is IVesting {
                 VestingRule({
                     percent: percent,
                     amount: amount,
-                    atTime: block.timestamp + atTime
+                    atTime: block.timestamp + atTime, // 绝对时间。
+                    vested: false
                 })
             );
         }
@@ -108,22 +132,72 @@ contract VestingV1 is IVesting {
     function updateMyVesting(uint256 vestingId) private {
         VestingTable storage table = vestingMap[vestingId];
 
-        // 遍历规则。
-        uint256 ruleLen = table.rules.length;
-        for (uint256 k = table.ruleScanIndex; k < ruleLen; k++) {
-            VestingRule storage rule = table.rules[k];
-            // 已经归属了。忽略。
-            if (rule.vested) {
-                continue;
+        // 还有未归属的。就计算规则，执行归属。
+        if (table.amountTotal != table.amountVested) {
+            // 遍历规则。
+            uint256 ruleLen = table.rules.length;
+            for (uint256 k = table.ruleScanIndex; k < ruleLen; k++) {
+                VestingRule storage rule = table.rules[k];
+                // 已经归属了。忽略。
+                if (rule.vested) {
+                    continue;
+                }
+                // 未到时间。忽略。 后面的都不用看了。
+                if (block.timestamp < rule.atTime) {
+                    break;
+                }
+                // 已到时间。执行归属。
+                table.amountVested += rule.amount;
+                rule.vested = true;
+                table.ruleScanIndex = k;
             }
-            // 未到时间。忽略。 后面的都不用看了。
-            if (block.timestamp < rule.atTime) {
-                break;
-            }
-            // 已到时间。执行归属。
-            table.amountVested += rule.amount;
-            rule.vested = true;
-            table.ruleScanIndex = k;
         }
+    }
+
+    // 查询信息。
+    function queryVesting(
+        uint256 vestingId
+    )
+        public
+        needOwner(vestingId)
+        returns (
+            address tokenAddr,
+            uint256 amountTotal,
+            uint256 amountVested,
+            uint256 amountClaimed
+        )
+    {
+        updateMyVesting(vestingId);
+
+        VestingTable storage table = vestingMap[vestingId];
+        return (
+            table.tokenAddr,
+            table.amountTotal,
+            table.amountVested,
+            table.amountClaimed
+        );
+    }
+
+    // 领取全部。
+    function claimAll(
+        uint256 vestingId
+    ) public needOwner(vestingId) returns (uint256) {
+        updateMyVesting(vestingId);
+
+        VestingTable storage table = vestingMap[vestingId];
+
+        // 可领取金额。
+        uint256 amountPending = table.amountVested - table.amountClaimed;
+
+        if (amountPending > 0) {
+            table.amountClaimed += amountPending;
+
+            // 转token
+            IERC20 erc20 = IERC20(table.tokenAddr);
+            bool ok = erc20.transfer(table.to, amountPending);
+            require(ok, "token transfer fail");
+        }
+
+        return (amountPending);
     }
 }
