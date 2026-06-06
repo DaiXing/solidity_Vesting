@@ -4,9 +4,9 @@ pragma solidity ^0.8.13;
 import {
     VestingParam,
     VestingType,
-    IVesting2,
+    IVesting,
     VestingSched
-} from "./IVesting2.sol";
+} from "./IVesting.sol";
 import {
     UUPSUpgradeable
 } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
@@ -14,7 +14,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 // 归属。
-contract VestingV2 is IVesting2, UUPSUpgradeable, AccessControl {
+contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     uint256 vestingIdSeq = 0; // 序号。
     mapping(uint256 => VestingSched) vestingMap; // 全部的归属表。 key= vestingId
     mapping(address => VestingSched[]) userVestingMap; // 用户的归属列表。 key= 用户addr

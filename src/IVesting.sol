@@ -44,6 +44,6 @@ struct VestingSched {
     uint256 amountClaimed;
 }
 // 归属接口。
-interface IVesting2 {
+interface IVesting {
     event OK();
 }
