@@ -44,9 +44,9 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         // if (hasRole(ADMIN_ROLE, msg.sender)) {
         //     return;
         // }
-        VestingSched storage table = vestingMap[vestingId];
-        require(table.to == msg.sender, "vesting not owner");
-        require(table.amount > 0, "vesting not found");
+        VestingSched storage sched = vestingMap[vestingId];
+        require(sched.to == msg.sender, "vesting not owner");
+        require(sched.amount > 0, "vesting not found");
     }
 
     // 创建1个归属。
@@ -70,18 +70,19 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         vestingIdSeq++;
 
         // 填充归属表。
-        VestingSched storage table = vestingMap[vestingIdSeq];
-        table.vestingType = param.vestingType;
-        table.amount = param.amount;
-        table.timeBegin = param.timeBegin;
-        table.timeDuration = param.timeDuration;
-        table.vestingId = vestingIdSeq;
-        table.tokenAddr = tokenAddr;
-        table.to = to;
-        userVestingMap[msg.sender].push(table);
+        VestingSched storage sched = vestingMap[vestingIdSeq];
+        sched.vestingType = param.vestingType;
+        sched.amount = param.amount;
+        sched.timeBegin = param.timeBegin;
+        sched.timeDuration = param.timeDuration;
+        sched.vestingId = vestingIdSeq;
+        sched.tokenAddr = tokenAddr;
+        sched.to = to;
+        userVestingMap[msg.sender].push(sched);
 
         // 冻结token。
-        erc20.transferFrom(msg.sender, address(this), param.amount);
+        bool ok = erc20.transferFrom(msg.sender, address(this), param.amount);
+        require(ok, "transferFrom fail");
     }
 
     // 更新我的归属。
@@ -136,13 +137,13 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     {
         updateMyVesting();
 
-        VestingSched storage table = vestingMap[vestingId];
+        VestingSched storage sched = vestingMap[vestingId];
 
         return (
-            table.tokenAddr,
-            table.amount,
-            table.amountVested,
-            table.amountClaimed
+            sched.tokenAddr,
+            sched.amount,
+            sched.amountVested,
+            sched.amountClaimed
         );
     }
 
@@ -152,17 +153,17 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     ) public needOwner(vestingId) returns (uint256) {
         updateMyVesting();
 
-        VestingSched storage table = vestingMap[vestingId];
+        VestingSched storage sched = vestingMap[vestingId];
 
         // 可领取金额。
-        uint256 amountPending = table.amountVested - table.amountClaimed;
+        uint256 amountPending = sched.amountVested - sched.amountClaimed;
 
         if (amountPending > 0) {
-            table.amountClaimed += amountPending;
+            sched.amountClaimed += amountPending;
 
             // 转token
-            IERC20 erc20 = IERC20(table.tokenAddr);
-            bool ok = erc20.transfer(table.to, amountPending);
+            IERC20 erc20 = IERC20(sched.tokenAddr);
+            bool ok = erc20.transfer(sched.to, amountPending);
             require(ok, "token transfer fail");
         }
 
