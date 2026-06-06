@@ -17,7 +17,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     uint256 vestingIdSeq = 0; // 序号。
     mapping(uint256 => VestingSched) vestingMap; // 全部的归属表。 key= vestingId
-    mapping(address => VestingSched[]) userVestingMap; // 用户的归属列表。 key= 用户addr
+    mapping(address => uint256[]) userVestingMap; // 用户的归属列表。 key= 用户addr value= vestingId
 
     // 百分比系数。
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -78,7 +78,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         sched.vestingId = vestingIdSeq;
         sched.tokenAddr = tokenAddr;
         sched.to = to;
-        userVestingMap[msg.sender].push(sched);
+        userVestingMap[msg.sender].push(sched.vestingId);
 
         // 冻结token。
         bool ok = erc20.transferFrom(msg.sender, address(this), param.amount);
@@ -87,14 +87,19 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
 
     // 更新我的归属。
     function updateMyVesting() private {
-        VestingSched[] storage scheds = userVestingMap[msg.sender];
+        // 拷贝出ID。
+        uint256[] memory scheds = userVestingMap[msg.sender];
         if (scheds.length == 0) {
             return;
         }
         // 遍历。
         uint256 len = scheds.length;
         for (uint256 k = 0; k < len; k++) {
-            VestingSched storage sched = scheds[k];
+            uint256 tmpId = scheds[k];
+            VestingSched storage sched = vestingMap[tmpId];
+            if (sched.amount == 0) {
+                continue;
+            }
             // 没有到开始时间。
             if (block.timestamp < sched.timeBegin) {
                 continue;
@@ -117,6 +122,25 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
                 sched.amountVested =
                     (sched.amount * offSeconds) /
                     sched.timeDuration;
+                continue;
+            }
+        }
+    }
+
+    // 清理我的归属。
+    function cleanMyVesting() private {
+        // 拷贝出ID。
+        uint256[] memory scheds = userVestingMap[msg.sender];
+        if (scheds.length == 0) {
+            return;
+        }
+
+        // 遍历。
+        uint256 len = scheds.length;
+        for (uint256 k = 0; k < len; k++) {
+            uint256 tmpId = scheds[k];
+            VestingSched storage sched = vestingMap[tmpId];
+            if (sched.amount == 0) {
                 continue;
             }
         }
@@ -172,7 +196,8 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
 
     // 领取。 看全部归属。
     function claimAll() public returns (uint256) {
-        VestingSched[] storage scheds = userVestingMap[msg.sender];
+        // 拷贝ID。
+        uint256[] memory scheds = userVestingMap[msg.sender];
         if (scheds.length == 0) {
             return 0;
         }
@@ -180,8 +205,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         // 遍历。
         uint256 len = scheds.length;
         for (uint256 k = 0; k < len; k++) {
-            VestingSched storage sched = scheds[k];
-            sum += claimSingle(sched.vestingId);
+            sum += claimSingle(scheds[k]);
         }
         return sum;
     }
