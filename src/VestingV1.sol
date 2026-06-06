@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {
     VestingParam,
     VestingType,
+    VestingState,
     IVesting,
     VestingSched
 } from "./IVesting.sol";
@@ -40,10 +41,10 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         _;
     }
     function needOwner_(uint256 vestingId) private view {
-        // 管理员。权限大。
-        // if (hasRole(ADMIN_ROLE, msg.sender)) {
-        //     return;
-        // }
+        // 管理员。可以撤销或发放。
+        if (hasRole(ADMIN_ROLE, msg.sender)) {
+            return;
+        }
         VestingSched storage sched = vestingMap[vestingId];
         require(sched.to == msg.sender, "vesting not owner");
         require(sched.amount > 0, "vesting not found");
@@ -77,18 +78,28 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         sched.timeDuration = param.timeDuration;
         sched.vestingId = vestingIdSeq;
         sched.tokenAddr = tokenAddr;
+        sched.from = msg.sender;
         sched.to = to;
+        sched.state = VestingState.NORMAL;
         userVestingMap[msg.sender].push(sched.vestingId);
 
         // 冻结token。
         bool ok = erc20.transferFrom(msg.sender, address(this), param.amount);
         require(ok, "transferFrom fail");
+
+        emit VestingCreated(
+            sched.vestingId,
+            sched.tokenAddr,
+            sched.to,
+            sched.amount,
+            sched.timeBegin,
+            sched.timeDuration
+        );
     }
 
     // 更新我的归属。
     function updateMyVesting() private {
-        // 拷贝出ID。
-        uint256[] memory scheds = userVestingMap[msg.sender];
+        uint256[] storage scheds = userVestingMap[msg.sender];
         if (scheds.length == 0) {
             return;
         }
@@ -96,52 +107,70 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         uint256 len = scheds.length;
         for (uint256 k = 0; k < len; k++) {
             uint256 tmpId = scheds[k];
-            VestingSched storage sched = vestingMap[tmpId];
-            if (sched.amount == 0) {
-                continue;
-            }
-            // 没有到开始时间。
-            if (block.timestamp < sched.timeBegin) {
-                continue;
-            }
-            // 已经过了结束时间。全部归属。
-            uint256 timeEnd = sched.timeBegin + sched.timeDuration;
-            if (block.timestamp >= timeEnd) {
-                sched.amountVested = sched.amount;
-            }
-            // 分情况。
-            // 悬崖模式。只看开始时间。
-            if (VestingType.CLIFF == sched.vestingType) {
-                continue;
-            }
-            // 线性模式。算时间比例。
-            if (VestingType.LINEAR == sched.vestingType) {
-                // 过了多久。
-                uint256 offSeconds = block.timestamp - sched.timeBegin;
-                // 百分比。
-                sched.amountVested =
-                    (sched.amount * offSeconds) /
-                    sched.timeDuration;
-                continue;
-            }
+            updateSingleVesting(tmpId);
+        }
+    }
+
+    // 更新1个归属。
+    function updateSingleVesting(uint256 vestingId) private {
+        VestingSched storage sched = vestingMap[vestingId];
+        if (sched.amount == 0) {
+            return;
+        }
+        // 状态。
+        if (sched.state != VestingState.NORMAL) {
+            return;
+        }
+        // 没有到开始时间。
+        if (block.timestamp < sched.timeBegin) {
+            return;
+        }
+        // 已经过了结束时间。全部归属。
+        uint256 timeEnd = sched.timeBegin + sched.timeDuration;
+        if (block.timestamp >= timeEnd) {
+            sched.amountVested = sched.amount;
+        }
+        // 分情况。
+        // 悬崖模式。只看开始时间。
+        if (VestingType.CLIFF == sched.vestingType) {
+            return;
+        }
+        // 线性模式。算时间比例。
+        if (VestingType.LINEAR == sched.vestingType) {
+            // 过了多久。
+            uint256 offSeconds = block.timestamp - sched.timeBegin;
+            // 百分比。
+            sched.amountVested =
+                (sched.amount * offSeconds) /
+                sched.timeDuration;
+            return;
         }
     }
 
     // 清理我的归属。
-    function cleanMyVesting() private {
-        // 拷贝出ID。
-        uint256[] memory scheds = userVestingMap[msg.sender];
+    function cleanVesting(address user) private {
+        uint256[] storage scheds = userVestingMap[user];
         if (scheds.length == 0) {
             return;
         }
 
         // 遍历。
         uint256 len = scheds.length;
-        for (uint256 k = 0; k < len; k++) {
+        // 倒序。 便于删除。
+        for (uint256 k = len - 1; k >= 0; k--) {
             uint256 tmpId = scheds[k];
             VestingSched storage sched = vestingMap[tmpId];
-            if (sched.amount == 0) {
-                continue;
+            // 都领取了，或者撤销了。可以删除。
+            if (
+                sched.amount == sched.amountClaimed ||
+                sched.state == VestingState.REVOKED
+            ) {
+                delete vestingMap[tmpId];
+                // 当前元素、末尾元素，互换。删除末尾。
+                scheds[k] = scheds[scheds.length - 1];
+                scheds.pop();
+
+                emit VestingDeleted(sched.vestingId, sched.tokenAddr, sched.to);
             }
         }
     }
@@ -159,7 +188,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
             uint256 amountClaimed
         )
     {
-        updateMyVesting();
+        updateSingleVesting(vestingId);
 
         VestingSched storage sched = vestingMap[vestingId];
 
@@ -175,7 +204,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     function claimSingle(
         uint256 vestingId
     ) public needOwner(vestingId) returns (uint256) {
-        updateMyVesting();
+        updateSingleVesting(vestingId);
 
         VestingSched storage sched = vestingMap[vestingId];
 
@@ -183,12 +212,25 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         uint256 amountPending = sched.amountVested - sched.amountClaimed;
 
         if (amountPending > 0) {
+            // 累加。
             sched.amountClaimed += amountPending;
 
             // 转token
             IERC20 erc20 = IERC20(sched.tokenAddr);
             bool ok = erc20.transfer(sched.to, amountPending);
             require(ok, "token transfer fail");
+
+            emit VestingClaimed(
+                sched.vestingId,
+                sched.tokenAddr,
+                sched.to,
+                amountPending
+            );
+        }
+
+        // 都领取了。删除。
+        if (sched.amount == sched.amountClaimed) {
+            cleanVesting(msg.sender);
         }
 
         return (amountPending);
@@ -208,5 +250,35 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
             sum += claimSingle(scheds[k]);
         }
         return sum;
+    }
+
+    // 撤销。 已归属的，发放。其他的，回退。
+    function revoke(uint256 vestingId) public onlyRole(ADMIN_ROLE) {
+        // 触发领取。
+        claimSingle(vestingId);
+
+        VestingSched storage sched = vestingMap[vestingId];
+
+        // 剩余数量，返还。
+        uint256 amountLeft = sched.amount - sched.amountClaimed;
+        if (amountLeft > 0) {
+            // 状态。
+            sched.state = VestingState.REVOKED;
+
+            // 转token
+            IERC20 erc20 = IERC20(sched.tokenAddr);
+            bool ok = erc20.transfer(sched.from, amountLeft);
+            require(ok, "token transfer fail");
+        }
+
+        // 清理。
+        cleanVesting(sched.to);
+
+        emit VestingRevoked(
+            sched.vestingId,
+            sched.tokenAddr,
+            sched.to,
+            amountLeft
+        );
     }
 }
