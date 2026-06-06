@@ -10,6 +10,8 @@ enum VestingType {
 }
 // 归属的参数。
 struct VestingParam {
+    // 归属类型。
+    VestingType vestingType;
     // 归属的数量。
     uint256 amount;
     // 开始时间。
@@ -19,6 +21,8 @@ struct VestingParam {
 }
 // 归属的时间表。
 struct VestingSched {
+    // 归属类型。
+    VestingType vestingType;
     // 归属的数量。
     uint256 amount;
     // 开始时间。
