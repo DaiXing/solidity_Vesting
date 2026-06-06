@@ -85,4 +85,28 @@ interface IVesting {
         address indexed to,
         uint256 amountReturn //返还数量。
     );
+
+    // 创建1个归属。
+    function createVesting(
+        address tokenAddr, // 代币合约。
+        address to, // 给某人。
+        VestingParam memory param // 参数。
+    ) external;
+    // 查询信息。
+    function queryVesting(
+        uint256 vestingId
+    )
+        external
+        returns (
+            address tokenAddr,
+            uint256 amount,
+            uint256 amountVested,
+            uint256 amountClaimed
+        );
+    // 领取。 看单个归属。
+    function claimSingle(uint256 vestingId) external returns (uint256);
+    // 领取。 看全部归属。
+    function claimAll() external returns (uint256);
+    // 撤销。 已归属的，发放。其他的，回退。
+    function revoke(uint256 vestingId) external;
 }

@@ -13,9 +13,19 @@ import {
 } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {
+    ReentrancyGuard
+} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 // 归属。
-contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
+contract VestingV1 is
+    IVesting,
+    UUPSUpgradeable,
+    AccessControl,
+    Pausable,
+    ReentrancyGuard
+{
     uint256 vestingIdSeq = 0; // 序号。
     mapping(uint256 => VestingSched) vestingMap; // 全部的归属表。 key= vestingId
     mapping(address => uint256[]) userVestingMap; // 用户的归属列表。 key= 用户addr value= vestingId
@@ -50,12 +60,22 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         require(sched.amount > 0, "vesting not found");
     }
 
+    // 暂停。
+    function pause() public onlyRole(ADMIN_ROLE) {
+        _pause();
+    }
+    // 取消暂停。
+    function unpause() public onlyRole(ADMIN_ROLE) {
+        _unpause();
+    }
+    // -------------------------------
+
     // 创建1个归属。
     function createVesting(
         address tokenAddr, // 代币合约。
         address to, // 给某人。
         VestingParam memory param // 参数。
-    ) public {
+    ) public whenNotPaused nonReentrant {
         // 校验参数。
         require(tokenAddr != address(0), "tokenAddr invalid");
         require(to != address(0), "to invalid");
@@ -160,12 +180,14 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
         for (uint256 k = len - 1; k >= 0; k--) {
             uint256 tmpId = scheds[k];
             VestingSched storage sched = vestingMap[tmpId];
+
             // 都领取了，或者撤销了。可以删除。
             if (
                 sched.amount == sched.amountClaimed ||
                 sched.state == VestingState.REVOKED
             ) {
                 delete vestingMap[tmpId];
+
                 // 当前元素、末尾元素，互换。删除末尾。
                 scheds[k] = scheds[scheds.length - 1];
                 scheds.pop();
@@ -203,7 +225,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     // 领取。 看单个归属。
     function claimSingle(
         uint256 vestingId
-    ) public needOwner(vestingId) returns (uint256) {
+    ) public needOwner(vestingId) whenNotPaused nonReentrant returns (uint256) {
         updateSingleVesting(vestingId);
 
         VestingSched storage sched = vestingMap[vestingId];
@@ -237,7 +259,7 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     }
 
     // 领取。 看全部归属。
-    function claimAll() public returns (uint256) {
+    function claimAll() public whenNotPaused nonReentrant returns (uint256) {
         // 拷贝ID。
         uint256[] memory scheds = userVestingMap[msg.sender];
         if (scheds.length == 0) {
@@ -253,7 +275,9 @@ contract VestingV1 is IVesting, UUPSUpgradeable, AccessControl {
     }
 
     // 撤销。 已归属的，发放。其他的，回退。
-    function revoke(uint256 vestingId) public onlyRole(ADMIN_ROLE) {
+    function revoke(
+        uint256 vestingId
+    ) public whenNotPaused nonReentrant onlyRole(ADMIN_ROLE) {
         // 触发领取。
         claimSingle(vestingId);
 
